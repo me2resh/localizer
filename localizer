@@ -1,0 +1,272 @@
+#!/bin/bash
+
+# Localizer - Process and chat with files using local LLMs
+# Requires: ollama (https://ollama.ai)
+
+set -e
+
+# Colors for output
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+BLUE='\033[0;34m'
+YELLOW='\033[1;33m'
+NC='\033[0m' # No Color
+
+# Check if ollama is installed
+check_ollama() {
+    if ! command -v ollama &> /dev/null; then
+        echo -e "${RED}Error: ollama is not installed.${NC}"
+        echo "Please install it from https://ollama.ai"
+        exit 1
+    fi
+}
+
+# Get available models from ollama
+get_models() {
+    ollama list 2>/dev/null | tail -n +2 | awk '{print $1}' | grep -v "^$"
+}
+
+# Read file contents
+read_file() {
+    local file="$1"
+    if [[ -f "$file" ]]; then
+        echo "=== File: $file ==="
+        cat "$file"
+        echo ""
+    fi
+}
+
+# Read all files from path (file or directory)
+read_files() {
+    local path="$1"
+    local content=""
+
+    if [[ -f "$path" ]]; then
+        content=$(read_file "$path")
+    elif [[ -d "$path" ]]; then
+        while IFS= read -r -d '' file; do
+            content+=$(read_file "$file")
+            content+=$'\n'
+        done < <(find "$path" -type f \( -name "*.txt" -o -name "*.md" -o -name "*.json" -o -name "*.yaml" -o -name "*.yml" -o -name "*.xml" -o -name "*.csv" -o -name "*.js" -o -name "*.ts" -o -name "*.py" -o -name "*.go" -o -name "*.rs" -o -name "*.java" -o -name "*.c" -o -name "*.cpp" -o -name "*.h" -o -name "*.sh" -o -name "*.html" -o -name "*.css" -o -name "*.sql" -o -name "*.swift" -o -name "*.kt" -o -name "*.rb" -o -name "*.php" \) -print0 2>/dev/null)
+    else
+        echo -e "${RED}Error: Path '$path' does not exist.${NC}"
+        exit 1
+    fi
+
+    echo "$content"
+}
+
+# Select model interactively
+select_model() {
+    echo -e "${BLUE}Available local LLM models:${NC}"
+    local models=($(get_models))
+
+    if [[ ${#models[@]} -eq 0 ]]; then
+        echo -e "${RED}No models found. Please pull a model first:${NC}"
+        echo "  ollama pull llama3.2"
+        echo "  ollama pull mistral"
+        echo "  ollama pull codellama"
+        exit 1
+    fi
+
+    local i=1
+    for model in "${models[@]}"; do
+        echo "  $i) $model"
+        ((i++))
+    done
+
+    echo ""
+    read -p "Select model (1-${#models[@]}): " choice
+
+    if [[ "$choice" =~ ^[0-9]+$ ]] && [[ "$choice" -ge 1 ]] && [[ "$choice" -le ${#models[@]} ]]; then
+        SELECTED_MODEL="${models[$((choice-1))]}"
+        echo -e "${GREEN}Selected: $SELECTED_MODEL${NC}"
+    else
+        echo -e "${RED}Invalid selection.${NC}"
+        exit 1
+    fi
+}
+
+# Send prompt to LLM
+query_llm() {
+    local model="$1"
+    local prompt="$2"
+
+    ollama run "$model" "$prompt" 2>/dev/null
+}
+
+# Process command: read files, process with LLM, write output
+cmd_process() {
+    local path="$1"
+
+    if [[ -z "$path" ]]; then
+        echo -e "${RED}Usage: localizer process <file-or-folder-path>${NC}"
+        exit 1
+    fi
+
+    check_ollama
+
+    echo -e "${BLUE}Reading files from: $path${NC}"
+    local file_content
+    file_content=$(read_files "$path")
+
+    if [[ -z "$file_content" ]]; then
+        echo -e "${RED}No readable files found.${NC}"
+        exit 1
+    fi
+
+    echo -e "${GREEN}Files loaded successfully.${NC}"
+    echo ""
+
+    # Get context/instructions
+    echo -e "${YELLOW}Enter your instructions (what should the LLM do with these files):${NC}"
+    read -p "> " instructions
+
+    if [[ -z "$instructions" ]]; then
+        echo -e "${RED}Instructions cannot be empty.${NC}"
+        exit 1
+    fi
+
+    echo ""
+
+    # Select model
+    select_model
+    echo ""
+
+    # Get output file path
+    read -p "Output file path [output.txt]: " output_file
+    output_file="${output_file:-output.txt}"
+    # Expand ~ to home directory
+    output_file="${output_file/#\~/$HOME}"
+
+    echo ""
+    echo -e "${BLUE}Processing with $SELECTED_MODEL...${NC}"
+
+    # Construct the prompt
+    local full_prompt="You are given the following file contents:
+
+$file_content
+
+Instructions: $instructions
+
+Please process the above files according to the instructions and provide your output."
+
+    # Query LLM and save output
+    local result
+    result=$(query_llm "$SELECTED_MODEL" "$full_prompt")
+
+    echo "$result" > "$output_file"
+
+    echo -e "${GREEN}Done! Output written to: $output_file${NC}"
+}
+
+# Chat command: interactive chat about files
+cmd_chat() {
+    local path="$1"
+
+    if [[ -z "$path" ]]; then
+        echo -e "${RED}Usage: localizer chat <file-or-folder-path>${NC}"
+        exit 1
+    fi
+
+    check_ollama
+
+    echo -e "${BLUE}Reading files from: $path${NC}"
+    local file_content
+    file_content=$(read_files "$path")
+
+    if [[ -z "$file_content" ]]; then
+        echo -e "${RED}No readable files found.${NC}"
+        exit 1
+    fi
+
+    echo -e "${GREEN}Files loaded successfully.${NC}"
+    echo ""
+
+    # Select model
+    select_model
+    echo ""
+
+    echo -e "${YELLOW}Chat mode - Ask questions about your files (type 'exit' or 'quit' to stop)${NC}"
+    echo ""
+
+    local conversation_context="You are a helpful assistant. You have been given the following file contents to analyze and answer questions about:
+
+$file_content
+
+Answer the user's questions based on the content above. Be concise and helpful."
+
+    while true; do
+        read -p "You: " user_input
+
+        if [[ "$user_input" == "exit" ]] || [[ "$user_input" == "quit" ]]; then
+            echo -e "${GREEN}Goodbye!${NC}"
+            break
+        fi
+
+        if [[ -z "$user_input" ]]; then
+            continue
+        fi
+
+        local full_prompt="$conversation_context
+
+User question: $user_input
+
+Please answer based on the file contents provided."
+
+        echo -e "${BLUE}Assistant:${NC}"
+        query_llm "$SELECTED_MODEL" "$full_prompt"
+        echo ""
+    done
+}
+
+# Show help
+show_help() {
+    echo -e "${BLUE}Localizer${NC} - Process and chat with files using local LLMs"
+    echo ""
+    echo "Usage:"
+    echo "  localizer <command> <path>"
+    echo ""
+    echo "Commands:"
+    echo "  process <path>  Read files, process with LLM instructions, write output to file"
+    echo "  chat <path>     Interactively chat and ask questions about file contents"
+    echo ""
+    echo "Examples:"
+    echo "  localizer process ./src"
+    echo "  localizer process ./document.txt"
+    echo "  localizer chat ./data"
+    echo "  localizer chat ./config.json"
+    echo ""
+    echo "Supported file types:"
+    echo "  .txt, .md, .json, .yaml, .yml, .xml, .csv"
+    echo "  .js, .ts, .py, .go, .rs, .java, .c, .cpp, .h"
+    echo "  .sh, .html, .css, .sql, .swift, .kt, .rb, .php"
+    echo ""
+    echo "Requirements:"
+    echo "  - ollama (https://ollama.ai)"
+    echo "  - At least one model pulled (e.g., 'ollama pull llama3.2')"
+}
+
+# Main entry point
+main() {
+    local command="$1"
+    local path="$2"
+
+    case "$command" in
+        process)
+            cmd_process "$path"
+            ;;
+        chat)
+            cmd_chat "$path"
+            ;;
+        help|--help|-h)
+            show_help
+            ;;
+        *)
+            show_help
+            exit 1
+            ;;
+    esac
+}
+
+main "$@"
