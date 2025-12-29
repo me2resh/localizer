@@ -21,39 +21,245 @@ check_ollama() {
     fi
 }
 
+# Check if pdftotext is available (for PDF support)
+has_pdftotext() {
+    command -v pdftotext &> /dev/null
+}
+
+# Check if tesseract is available (for image OCR)
+has_tesseract() {
+    command -v tesseract &> /dev/null
+}
+
+# Check if a model is multimodal (vision-capable)
+is_vision_model() {
+    local model="$1"
+    # Common vision-capable models in Ollama
+    case "$model" in
+        llava*|bakllava*|moondream*|llama3.2-vision*|minicpm-v*|cogvlm*|yi-vl*)
+            return 0
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+}
+
+# Get file extension (lowercase)
+get_extension() {
+    local file="$1"
+    echo "${file##*.}" | tr '[:upper:]' '[:lower:]'
+}
+
+# macOS file picker - select a file
+pick_file() {
+    local prompt="${1:-Select a file}"
+    local result
+    result=$(osascript -e "POSIX path of (choose file with prompt \"$prompt\")" 2>/dev/null)
+    if [[ -z "$result" ]]; then
+        return 1
+    fi
+    echo "$result"
+}
+
+# macOS folder picker - select a folder
+pick_folder() {
+    local prompt="${1:-Select a folder}"
+    local result
+    result=$(osascript -e "POSIX path of (choose folder with prompt \"$prompt\")" 2>/dev/null)
+    if [[ -z "$result" ]]; then
+        return 1
+    fi
+    echo "$result"
+}
+
+# macOS save file picker - select save location
+pick_save_file() {
+    local prompt="${1:-Save file as}"
+    local default_name="${2:-output.txt}"
+    local result
+    result=$(osascript -e "POSIX path of (choose file name with prompt \"$prompt\" default name \"$default_name\")" 2>/dev/null)
+    if [[ -z "$result" ]]; then
+        return 1
+    fi
+    echo "$result"
+}
+
+# Prompt user to select file or folder
+pick_file_or_folder() {
+    echo -e "${YELLOW}What would you like to open?${NC}" >&2
+    echo "  1) Select a file" >&2
+    echo "  2) Select a folder" >&2
+    echo "" >&2
+    read -p "Choice (1-2): " choice
+
+    case "$choice" in
+        1)
+            pick_file "Select a file to process"
+            ;;
+        2)
+            pick_folder "Select a folder to process"
+            ;;
+        *)
+            echo -e "${RED}Invalid selection.${NC}" >&2
+            return 1
+            ;;
+    esac
+}
+
 # Get available models from ollama
 get_models() {
     ollama list 2>/dev/null | tail -n +2 | awk '{print $1}' | grep -v "^$"
 }
 
-# Read file contents
-read_file() {
+# Read PDF file contents
+read_pdf() {
     local file="$1"
-    if [[ -f "$file" ]]; then
-        echo "=== File: $file ==="
-        cat "$file"
-        echo ""
+    if has_pdftotext; then
+        pdftotext -layout "$file" - 2>/dev/null
+    else
+        echo "[PDF file - install pdftotext to extract text: brew install poppler]"
     fi
 }
+
+# Read image file via OCR
+read_image_ocr() {
+    local file="$1"
+    if has_tesseract; then
+        tesseract "$file" stdout 2>/dev/null
+    else
+        echo "[Image file - install tesseract for OCR: brew install tesseract]"
+    fi
+}
+
+# Encode image to base64 for multimodal models
+encode_image_base64() {
+    local file="$1"
+    base64 < "$file" | tr -d '\n'
+}
+
+# Check if file is an image
+is_image_file() {
+    local ext=$(get_extension "$1")
+    case "$ext" in
+        png|jpg|jpeg|gif|webp|bmp|tiff|tif)
+            return 0
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+}
+
+# Check if file is a PDF
+is_pdf_file() {
+    local ext=$(get_extension "$1")
+    [[ "$ext" == "pdf" ]]
+}
+
+# Read file contents (handles text, PDF, and images)
+read_file() {
+    local file="$1"
+    local mode="${2:-text}"  # text or vision
+
+    if [[ ! -f "$file" ]]; then
+        return
+    fi
+
+    echo "=== File: $file ==="
+
+    if is_pdf_file "$file"; then
+        read_pdf "$file"
+    elif is_image_file "$file"; then
+        if [[ "$mode" == "vision" ]]; then
+            echo "[Image will be processed by vision model]"
+        else
+            read_image_ocr "$file"
+        fi
+    else
+        cat "$file"
+    fi
+    echo ""
+}
+
+# Global array to store image file paths for vision processing
+IMAGE_FILES=()
 
 # Read all files from path (file or directory)
 read_files() {
     local path="$1"
+    local mode="${2:-text}"  # text or vision
     local content=""
+    IMAGE_FILES=()
 
     if [[ -f "$path" ]]; then
-        content=$(read_file "$path")
+        if is_image_file "$path"; then
+            IMAGE_FILES+=("$path")
+        fi
+        content=$(read_file "$path" "$mode")
     elif [[ -d "$path" ]]; then
         while IFS= read -r -d '' file; do
-            content+=$(read_file "$file")
+            if is_image_file "$file"; then
+                IMAGE_FILES+=("$file")
+            fi
+            content+=$(read_file "$file" "$mode")
             content+=$'\n'
-        done < <(find "$path" -type f \( -name "*.txt" -o -name "*.md" -o -name "*.json" -o -name "*.yaml" -o -name "*.yml" -o -name "*.xml" -o -name "*.csv" -o -name "*.js" -o -name "*.ts" -o -name "*.py" -o -name "*.go" -o -name "*.rs" -o -name "*.java" -o -name "*.c" -o -name "*.cpp" -o -name "*.h" -o -name "*.sh" -o -name "*.html" -o -name "*.css" -o -name "*.sql" -o -name "*.swift" -o -name "*.kt" -o -name "*.rb" -o -name "*.php" \) -print0 2>/dev/null)
+        done < <(find "$path" -type f \( \
+            -name "*.txt" -o -name "*.md" -o -name "*.json" -o -name "*.yaml" -o -name "*.yml" \
+            -o -name "*.xml" -o -name "*.csv" -o -name "*.js" -o -name "*.ts" -o -name "*.py" \
+            -o -name "*.go" -o -name "*.rs" -o -name "*.java" -o -name "*.c" -o -name "*.cpp" \
+            -o -name "*.h" -o -name "*.sh" -o -name "*.html" -o -name "*.css" -o -name "*.sql" \
+            -o -name "*.swift" -o -name "*.kt" -o -name "*.rb" -o -name "*.php" \
+            -o -name "*.pdf" \
+            -o -name "*.png" -o -name "*.jpg" -o -name "*.jpeg" -o -name "*.gif" \
+            -o -name "*.webp" -o -name "*.bmp" -o -name "*.tiff" -o -name "*.tif" \
+        \) -print0 2>/dev/null)
     else
         echo -e "${RED}Error: Path '$path' does not exist.${NC}"
         exit 1
     fi
 
     echo "$content"
+}
+
+# Query vision model with images using Ollama API
+query_vision_llm() {
+    local model="$1"
+    local prompt="$2"
+    shift 2
+    local images=("$@")
+
+    # Build the images array for the API
+    local images_json="["
+    local first=true
+    for img in "${images[@]}"; do
+        if [[ "$first" == true ]]; then
+            first=false
+        else
+            images_json+=","
+        fi
+        images_json+="\"$(encode_image_base64 "$img")\""
+    done
+    images_json+="]"
+
+    # Use Ollama API for vision models
+    local request_body=$(cat <<EOF
+{
+    "model": "$model",
+    "prompt": "$prompt",
+    "images": $images_json,
+    "stream": false
+}
+EOF
+)
+
+    local response
+    response=$(curl -s http://localhost:11434/api/generate \
+        -H "Content-Type: application/json" \
+        -d "$request_body")
+
+    # Extract the response text
+    echo "$response" | grep -o '"response":"[^"]*"' | sed 's/"response":"//;s/"$//' | sed 's/\\n/\n/g'
 }
 
 # Select model interactively
@@ -99,18 +305,32 @@ query_llm() {
 cmd_process() {
     local path="$1"
 
-    if [[ -z "$path" ]]; then
-        echo -e "${RED}Usage: localizer process <file-or-folder-path>${NC}"
-        exit 1
-    fi
-
     check_ollama
 
+    # If no path provided, use file picker
+    if [[ -z "$path" ]]; then
+        echo -e "${BLUE}No path provided. Opening file picker...${NC}"
+        echo ""
+        path=$(pick_file_or_folder)
+        if [[ -z "$path" ]]; then
+            echo -e "${RED}No file or folder selected.${NC}"
+            exit 1
+        fi
+        echo ""
+    fi
+
+    # First pass: detect what files we have
     echo -e "${BLUE}Reading files from: $path${NC}"
     local file_content
-    file_content=$(read_files "$path")
+    file_content=$(read_files "$path" "text")
 
-    if [[ -z "$file_content" ]]; then
+    local has_images=false
+    if [[ ${#IMAGE_FILES[@]} -gt 0 ]]; then
+        has_images=true
+        echo -e "${YELLOW}Found ${#IMAGE_FILES[@]} image(s)${NC}"
+    fi
+
+    if [[ -z "$file_content" ]] && [[ "$has_images" == false ]]; then
         echo -e "${RED}No readable files found.${NC}"
         exit 1
     fi
@@ -133,17 +353,60 @@ cmd_process() {
     select_model
     echo ""
 
+    # Check if we should use vision mode
+    local use_vision=false
+    if [[ "$has_images" == true ]] && is_vision_model "$SELECTED_MODEL"; then
+        use_vision=true
+        echo -e "${GREEN}Using vision mode with $SELECTED_MODEL${NC}"
+    elif [[ "$has_images" == true ]]; then
+        echo -e "${YELLOW}Note: Selected model doesn't support images. Using OCR fallback.${NC}"
+        echo -e "${YELLOW}For native image understanding, use a vision model (llava, bakllava, etc.)${NC}"
+    fi
+
     # Get output file path
-    read -p "Output file path [output.txt]: " output_file
-    output_file="${output_file:-output.txt}"
-    # Expand ~ to home directory
-    output_file="${output_file/#\~/$HOME}"
+    echo -e "${YELLOW}Where should the output be saved?${NC}"
+    echo "  1) Type a path"
+    echo "  2) Choose location (file picker)"
+    echo ""
+    read -p "Choice (1-2) [1]: " save_choice
+    save_choice="${save_choice:-1}"
+
+    local output_file
+    if [[ "$save_choice" == "2" ]]; then
+        output_file=$(pick_save_file "Save output as" "output.txt")
+        if [[ -z "$output_file" ]]; then
+            echo -e "${RED}No save location selected.${NC}"
+            exit 1
+        fi
+    else
+        read -p "Output file path [output.txt]: " output_file
+        output_file="${output_file:-output.txt}"
+        # Expand ~ to home directory
+        output_file="${output_file/#\~/$HOME}"
+    fi
 
     echo ""
     echo -e "${BLUE}Processing with $SELECTED_MODEL...${NC}"
 
-    # Construct the prompt
-    local full_prompt="You are given the following file contents:
+    local result
+    if [[ "$use_vision" == true ]]; then
+        # Re-read files in vision mode (skips OCR for images)
+        file_content=$(read_files "$path" "vision")
+
+        # Construct the prompt for vision model
+        local full_prompt="You are given the following file contents and images:
+
+$file_content
+
+Instructions: $instructions
+
+Please process the above files and images according to the instructions and provide your output."
+
+        # Query vision LLM with images
+        result=$(query_vision_llm "$SELECTED_MODEL" "$full_prompt" "${IMAGE_FILES[@]}")
+    else
+        # Construct the prompt
+        local full_prompt="You are given the following file contents:
 
 $file_content
 
@@ -151,9 +414,9 @@ Instructions: $instructions
 
 Please process the above files according to the instructions and provide your output."
 
-    # Query LLM and save output
-    local result
-    result=$(query_llm "$SELECTED_MODEL" "$full_prompt")
+        # Query LLM and save output
+        result=$(query_llm "$SELECTED_MODEL" "$full_prompt")
+    fi
 
     echo "$result" > "$output_file"
 
@@ -164,18 +427,34 @@ Please process the above files according to the instructions and provide your ou
 cmd_chat() {
     local path="$1"
 
-    if [[ -z "$path" ]]; then
-        echo -e "${RED}Usage: localizer chat <file-or-folder-path>${NC}"
-        exit 1
-    fi
-
     check_ollama
 
+    # If no path provided, use file picker
+    if [[ -z "$path" ]]; then
+        echo -e "${BLUE}No path provided. Opening file picker...${NC}"
+        echo ""
+        path=$(pick_file_or_folder)
+        if [[ -z "$path" ]]; then
+            echo -e "${RED}No file or folder selected.${NC}"
+            exit 1
+        fi
+        echo ""
+    fi
+
+    # First pass: detect what files we have
     echo -e "${BLUE}Reading files from: $path${NC}"
     local file_content
-    file_content=$(read_files "$path")
+    file_content=$(read_files "$path" "text")
 
-    if [[ -z "$file_content" ]]; then
+    local has_images=false
+    local saved_image_files=()
+    if [[ ${#IMAGE_FILES[@]} -gt 0 ]]; then
+        has_images=true
+        saved_image_files=("${IMAGE_FILES[@]}")
+        echo -e "${YELLOW}Found ${#IMAGE_FILES[@]} image(s)${NC}"
+    fi
+
+    if [[ -z "$file_content" ]] && [[ "$has_images" == false ]]; then
         echo -e "${RED}No readable files found.${NC}"
         exit 1
     fi
@@ -186,6 +465,18 @@ cmd_chat() {
     # Select model
     select_model
     echo ""
+
+    # Check if we should use vision mode
+    local use_vision=false
+    if [[ "$has_images" == true ]] && is_vision_model "$SELECTED_MODEL"; then
+        use_vision=true
+        echo -e "${GREEN}Using vision mode with $SELECTED_MODEL${NC}"
+        # Re-read files in vision mode
+        file_content=$(read_files "$path" "vision")
+    elif [[ "$has_images" == true ]]; then
+        echo -e "${YELLOW}Note: Selected model doesn't support images. Using OCR fallback.${NC}"
+        echo -e "${YELLOW}For native image understanding, use a vision model (llava, bakllava, etc.)${NC}"
+    fi
 
     echo -e "${YELLOW}Chat mode - Ask questions about your files (type 'exit' or 'quit' to stop)${NC}"
     echo ""
@@ -215,9 +506,225 @@ User question: $user_input
 Please answer based on the file contents provided."
 
         echo -e "${BLUE}Assistant:${NC}"
-        query_llm "$SELECTED_MODEL" "$full_prompt"
+        if [[ "$use_vision" == true ]]; then
+            query_vision_llm "$SELECTED_MODEL" "$full_prompt" "${saved_image_files[@]}"
+        else
+            query_llm "$SELECTED_MODEL" "$full_prompt"
+        fi
         echo ""
     done
+}
+
+# Check if sox (rec) is available for recording
+has_sox() {
+    command -v rec &> /dev/null
+}
+
+# Check if whisper is available for transcription
+has_whisper() {
+    command -v whisper &> /dev/null
+}
+
+# Get available macOS voices
+get_voices() {
+    say -v ? | awk -F'#' '{print $1}' | sed 's/[[:space:]]*$//'
+}
+
+# Select voice interactively
+select_voice() {
+    echo -e "${BLUE}Available voices:${NC}" >&2
+    local voices=()
+    local i=1
+
+    # Get some good default voices
+    while IFS= read -r voice; do
+        voices+=("$voice")
+        echo "  $i) $voice" >&2
+        ((i++))
+        # Limit to first 15 voices for readability
+        if [[ $i -gt 15 ]]; then
+            echo "  ...(use 'say -v ?' to see all voices)" >&2
+            break
+        fi
+    done < <(say -v ? | grep -E "en_|en-" | head -15 | awk -F'#' '{print $1}' | sed 's/[[:space:]]*$//')
+
+    echo "" >&2
+    read -p "Select voice (1-${#voices[@]}) [1]: " choice
+    choice="${choice:-1}"
+
+    if [[ "$choice" =~ ^[0-9]+$ ]] && [[ "$choice" -ge 1 ]] && [[ "$choice" -le ${#voices[@]} ]]; then
+        local selected="${voices[$((choice-1))]}"
+        # Extract just the voice name (first word)
+        echo "$selected" | awk '{print $1}'
+    else
+        echo "Samantha"  # Default macOS voice
+    fi
+}
+
+# Speak command: read file and speak it aloud
+cmd_speak() {
+    local path="$1"
+
+    # If no path provided, use file picker
+    if [[ -z "$path" ]]; then
+        echo -e "${BLUE}No path provided. Opening file picker...${NC}"
+        echo ""
+        path=$(pick_file_or_folder)
+        if [[ -z "$path" ]]; then
+            echo -e "${RED}No file or folder selected.${NC}"
+            exit 1
+        fi
+        echo ""
+    fi
+
+    echo -e "${BLUE}Reading files from: $path${NC}"
+    local file_content
+    file_content=$(read_files "$path" "text")
+
+    if [[ -z "$file_content" ]]; then
+        echo -e "${RED}No readable text found.${NC}"
+        exit 1
+    fi
+
+    echo -e "${GREEN}Files loaded successfully.${NC}"
+    echo ""
+
+    # Select voice
+    local voice
+    voice=$(select_voice)
+    echo -e "${GREEN}Using voice: $voice${NC}"
+    echo ""
+
+    # Optionally adjust rate
+    read -p "Speech rate (words per minute) [180]: " rate
+    rate="${rate:-180}"
+
+    echo ""
+    echo -e "${BLUE}Speaking... (Press Ctrl+C to stop)${NC}"
+    echo ""
+
+    # Speak the content
+    say -v "$voice" -r "$rate" "$file_content"
+
+    echo -e "${GREEN}Done!${NC}"
+}
+
+# Record command: record from microphone
+cmd_record() {
+    if ! has_sox; then
+        echo -e "${RED}Error: sox is not installed.${NC}"
+        echo "Please install it: brew install sox"
+        exit 1
+    fi
+
+    local whisper_available=true
+    if ! has_whisper; then
+        whisper_available=false
+    fi
+
+    echo -e "${YELLOW}What would you like to do with the recording?${NC}"
+    if [[ "$whisper_available" == true ]]; then
+        echo "  1) Transcribe to text"
+    else
+        echo -e "  1) Transcribe to text ${RED}(whisper not installed)${NC}"
+    fi
+    echo "  2) Save as audio file"
+    echo ""
+    read -p "Choice (1-2): " record_choice
+
+    # Check whisper before recording if transcription selected
+    if [[ "$record_choice" == "1" ]] && [[ "$whisper_available" == false ]]; then
+        echo ""
+        echo -e "${RED}Error: whisper is not installed.${NC}"
+        echo "Please install it: brew install whisper-cpp"
+        exit 1
+    fi
+
+    local output_file
+    local temp_audio="/tmp/localizer_recording_$$.wav"
+
+    echo ""
+    echo -e "${BLUE}Recording... Press Ctrl+C to stop${NC}"
+    echo ""
+
+    # Record audio (sox rec command)
+    # Using trap to handle Ctrl+C gracefully
+    trap "echo ''" INT
+    rec -q "$temp_audio" 2>/dev/null || true
+    trap - INT
+
+    if [[ ! -f "$temp_audio" ]]; then
+        echo -e "${RED}Recording failed or cancelled.${NC}"
+        exit 1
+    fi
+
+    echo ""
+    echo -e "${GREEN}Recording saved.${NC}"
+
+    case "$record_choice" in
+        1)
+            # Transcribe
+            echo -e "${BLUE}Transcribing with Whisper...${NC}"
+            echo "(First run may download model files)"
+            echo ""
+            whisper "$temp_audio" --output_format txt --output_dir /tmp --model tiny
+
+            # Read the transcription output
+            local txt_file="/tmp/$(basename "$temp_audio" .wav).txt"
+            if [[ -f "$txt_file" ]]; then
+                echo ""
+                echo -e "${GREEN}Transcription:${NC}"
+                cat "$txt_file"
+                echo ""
+
+                read -p "Save transcription to file? (y/n) [n]: " save_choice
+                if [[ "$save_choice" == "y" || "$save_choice" == "Y" ]]; then
+                    output_file=$(pick_save_file "Save transcription as" "transcription.txt")
+                    if [[ -z "$output_file" ]]; then
+                        echo -e "${RED}No save location selected.${NC}"
+                    else
+                        mv "$txt_file" "$output_file"
+                        echo -e "${GREEN}Saved to: $output_file${NC}"
+                    fi
+                fi
+            else
+                echo -e "${RED}Transcription failed.${NC}"
+            fi
+
+            # Cleanup temp audio
+            rm -f "$temp_audio"
+            ;;
+        2)
+            # Save audio file
+            echo -e "${YELLOW}Where should the audio be saved?${NC}"
+            echo "  1) Type a path"
+            echo "  2) Choose location (file picker)"
+            echo ""
+            read -p "Choice (1-2) [1]: " save_choice
+            save_choice="${save_choice:-1}"
+
+            if [[ "$save_choice" == "2" ]]; then
+                output_file=$(pick_save_file "Save recording as" "recording.wav")
+                if [[ -z "$output_file" ]]; then
+                    echo -e "${RED}No save location selected.${NC}"
+                    rm -f "$temp_audio"
+                    exit 1
+                fi
+            else
+                read -p "Output file path [recording.wav]: " output_file
+                output_file="${output_file:-recording.wav}"
+                output_file="${output_file/#\~/$HOME}"
+            fi
+
+            mv "$temp_audio" "$output_file"
+            echo -e "${GREEN}Recording saved to: $output_file${NC}"
+            ;;
+        *)
+            echo -e "${RED}Invalid selection.${NC}"
+            rm -f "$temp_audio"
+            exit 1
+            ;;
+    esac
 }
 
 # Show help
@@ -225,26 +732,48 @@ show_help() {
     echo -e "${BLUE}Localizer${NC} - Process and chat with files using local LLMs"
     echo ""
     echo "Usage:"
-    echo "  localizer <command> <path>"
+    echo "  localizer <command> [path]"
     echo ""
     echo "Commands:"
-    echo "  process <path>  Read files, process with LLM instructions, write output to file"
-    echo "  chat <path>     Interactively chat and ask questions about file contents"
+    echo "  process [path]  Read files, process with LLM instructions, write output to file"
+    echo "  chat [path]     Interactively chat and ask questions about file contents"
+    echo "  speak [path]    Read file contents aloud using text-to-speech"
+    echo "  record          Record audio from microphone (transcribe or save)"
+    echo ""
+    echo "Note: If no path is provided, a file picker dialog will open (macOS)."
     echo ""
     echo "Examples:"
+    echo "  localizer process              # opens file picker"
     echo "  localizer process ./src"
     echo "  localizer process ./document.txt"
+    echo "  localizer process ./image.png  # with vision model or OCR"
+    echo "  localizer chat                 # opens file picker"
     echo "  localizer chat ./data"
-    echo "  localizer chat ./config.json"
+    echo "  localizer chat ./document.pdf"
+    echo "  localizer speak ./readme.md    # speak file contents"
+    echo "  localizer record               # record from microphone"
     echo ""
     echo "Supported file types:"
-    echo "  .txt, .md, .json, .yaml, .yml, .xml, .csv"
-    echo "  .js, .ts, .py, .go, .rs, .java, .c, .cpp, .h"
-    echo "  .sh, .html, .css, .sql, .swift, .kt, .rb, .php"
+    echo "  Text:   .txt, .md, .json, .yaml, .yml, .xml, .csv"
+    echo "  Code:   .js, .ts, .py, .go, .rs, .java, .c, .cpp, .h"
+    echo "          .sh, .html, .css, .sql, .swift, .kt, .rb, .php"
+    echo "  PDF:    .pdf (requires pdftotext)"
+    echo "  Images: .png, .jpg, .jpeg, .gif, .webp, .bmp, .tiff"
+    echo ""
+    echo "Image processing modes:"
+    echo "  - Vision models (llava, bakllava, etc.): Native image understanding"
+    echo "  - Other models: OCR text extraction via tesseract"
     echo ""
     echo "Requirements:"
     echo "  - ollama (https://ollama.ai)"
     echo "  - At least one model pulled (e.g., 'ollama pull llama3.2')"
+    echo ""
+    echo "Optional dependencies:"
+    echo "  - pdftotext: For PDF support (brew install poppler)"
+    echo "  - tesseract: For image OCR (brew install tesseract)"
+    echo "  - Vision model: For native image understanding (ollama pull llava)"
+    echo "  - sox: For microphone recording (brew install sox)"
+    echo "  - whisper: For audio transcription (brew install whisper-cpp)"
 }
 
 # Main entry point
@@ -258,6 +787,12 @@ main() {
             ;;
         chat)
             cmd_chat "$path"
+            ;;
+        speak)
+            cmd_speak "$path"
+            ;;
+        record)
+            cmd_record
             ;;
         help|--help|-h)
             show_help
