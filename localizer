@@ -298,7 +298,7 @@ query_llm() {
     local model="$1"
     local prompt="$2"
 
-    ollama run "$model" "$prompt" 2>/dev/null
+    echo "$prompt" | ollama run "$model"
 }
 
 # Process command: read files, process with LLM, write output
@@ -727,6 +727,243 @@ cmd_record() {
     esac
 }
 
+# Reply command: polish messages/replies with professional tone
+cmd_reply() {
+    check_ollama
+
+    echo -e "${BLUE}=== Message Reply Assistant ===${NC}"
+    echo -e "${YELLOW}Helps you write polite, professional replies${NC}"
+    echo ""
+
+    # Select model first
+    select_model
+    echo ""
+
+    # Get context (original message)
+    echo -e "${YELLOW}Paste the original message/context you're replying to.${NC}"
+    echo -e "${YELLOW}(Type ${GREEN}END${YELLOW} on a new line when done)${NC}"
+    echo ""
+
+    local context=""
+    while IFS= read -r line; do
+        if [[ "$line" == "END" || "$line" == "end" ]]; then
+            break
+        fi
+        context+="$line"$'\n'
+    done
+    context=$(echo "$context" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
+
+    if [[ -z "$context" ]]; then
+        echo -e "${RED}Context cannot be empty.${NC}"
+        exit 1
+    fi
+
+    echo -e "${GREEN}Context received.${NC}"
+    echo ""
+
+    # Get draft reply
+    echo -e "${YELLOW}Enter your draft reply / key points you want to convey.${NC}"
+    echo -e "${YELLOW}(Type ${GREEN}END${YELLOW} on a new line when done)${NC}"
+    echo ""
+
+    local draft=""
+    while IFS= read -r line; do
+        if [[ "$line" == "END" || "$line" == "end" ]]; then
+            break
+        fi
+        draft+="$line"$'\n'
+    done
+    draft=$(echo "$draft" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
+
+    if [[ -z "$draft" ]]; then
+        echo -e "${RED}Draft reply cannot be empty.${NC}"
+        exit 1
+    fi
+
+    echo -e "${GREEN}Draft received.${NC}"
+    echo ""
+
+    # Main interaction loop
+    local current_result=""
+    local first_run=true
+
+    while true; do
+        local tone=""
+        local tone_instruction=""
+
+        # Select tone
+        echo -e "${YELLOW}Select tone for your reply:${NC}"
+        echo "  1) Professional (clear, respectful, business-appropriate)"
+        echo "  2) Friendly Professional (warm but professional)"
+        echo "  3) Formal/Executive (polished, authoritative)"
+        echo "  4) Direct & Concise (brief, to the point)"
+        echo "  5) Diplomatic (tactful, carefully worded)"
+        echo ""
+        read -p "Choice (1-5) [1]: " tone_choice
+        tone_choice="${tone_choice:-1}"
+
+        case "$tone_choice" in
+            1)
+                tone="Professional"
+                tone_instruction="Use a clear, respectful, and business-appropriate tone. Be polite but not overly formal."
+                ;;
+            2)
+                tone="Friendly Professional"
+                tone_instruction="Use a warm and approachable tone while maintaining professionalism. Be personable but appropriate for work."
+                ;;
+            3)
+                tone="Formal/Executive"
+                tone_instruction="Use a polished, authoritative tone suitable for executive communication. Be precise and commanding respect."
+                ;;
+            4)
+                tone="Direct & Concise"
+                tone_instruction="Be brief and to the point. Remove unnecessary words while remaining polite and professional."
+                ;;
+            5)
+                tone="Diplomatic"
+                tone_instruction="Use a tactful and carefully worded approach. Be considerate of sensitivities and potential concerns."
+                ;;
+            *)
+                tone="Professional"
+                tone_instruction="Use a clear, respectful, and business-appropriate tone. Be polite but not overly formal."
+                ;;
+        esac
+
+        echo ""
+        echo -e "${BLUE}Generating $tone reply with $SELECTED_MODEL...${NC}"
+        echo ""
+
+        local prompt="You are a writing assistant helping a Director of Platform and Architecture write a reply to a message.
+
+MESSAGE THEY ARE REPLYING TO:
+$context
+
+THEIR DRAFT REPLY / KEY POINTS THEY WANT TO CONVEY:
+$draft
+
+TONE: $tone
+$tone_instruction
+
+RULES:
+- Write a reply FROM the user TO the person who sent the original message
+- ONLY include what the user wants to say based on their draft/key points
+- Do NOT repeat or paraphrase the original message back to them
+- Do NOT add filler phrases, corporate jargon, or unnecessary pleasantries
+- Do NOT add things the user didn't ask for (no \"let me know if you need anything else\" unless they said it)
+- Be specific and direct - say exactly what needs to be said, nothing more
+- Fix grammar and spelling from the draft
+- Keep it short and natural
+- Output ONLY the reply text, nothing else"
+
+        current_result=$(query_llm "$SELECTED_MODEL" "$prompt")
+
+        echo -e "${GREEN}--- Polished Reply ---${NC}"
+        echo ""
+        echo "$current_result"
+        echo ""
+        echo -e "${GREEN}----------------------${NC}"
+        echo ""
+
+        # Options after generation
+        echo -e "${YELLOW}What would you like to do?${NC}"
+        echo "  1) Copy to clipboard"
+        echo "  2) Regenerate with different tone"
+        echo "  3) Modify (provide feedback)"
+        echo "  4) Start over (new context & draft)"
+        echo "  5) Done"
+        echo ""
+        read -p "Choice (1-5): " action_choice
+
+        case "$action_choice" in
+            1)
+                echo "$current_result" | pbcopy
+                echo -e "${GREEN}Copied to clipboard!${NC}"
+                echo ""
+                echo -e "${YELLOW}Continue?${NC}"
+                echo "  1) Regenerate with different tone"
+                echo "  2) Modify (provide feedback)"
+                echo "  3) Start over (new context & draft)"
+                echo "  4) Done"
+                echo ""
+                read -p "Choice (1-4) [4]: " continue_choice
+                continue_choice="${continue_choice:-4}"
+                case "$continue_choice" in
+                    1) continue ;;
+                    2)
+                        echo ""
+                        echo -e "${YELLOW}Enter your feedback/modification request:${NC}"
+                        echo -e "${YELLOW}(Type ${GREEN}END${YELLOW} on a new line when done)${NC}"
+                        echo ""
+                        local feedback=""
+                        while IFS= read -r line; do
+                            if [[ "$line" == "END" || "$line" == "end" ]]; then
+                                break
+                            fi
+                            feedback+="$line"$'\n'
+                        done
+                        feedback=$(echo "$feedback" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
+
+                        if [[ -n "$feedback" ]]; then
+                            draft="$current_result
+
+MODIFICATION REQUEST: $feedback"
+                        fi
+                        continue
+                        ;;
+                    3)
+                        echo ""
+                        echo -e "${BLUE}Starting over...${NC}"
+                        echo ""
+                        cmd_reply
+                        return
+                        ;;
+                    *)
+                        echo -e "${GREEN}Done!${NC}"
+                        break
+                        ;;
+                esac
+                ;;
+            2)
+                continue
+                ;;
+            3)
+                echo ""
+                echo -e "${YELLOW}Enter your feedback/modification request:${NC}"
+                echo -e "${YELLOW}(Type ${GREEN}END${YELLOW} on a new line when done)${NC}"
+                echo ""
+                local feedback=""
+                while IFS= read -r line; do
+                    if [[ "$line" == "END" || "$line" == "end" ]]; then
+                        break
+                    fi
+                    feedback+="$line"$'\n'
+                done
+                feedback=$(echo "$feedback" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
+
+                if [[ -n "$feedback" ]]; then
+                    draft="Previous version:
+$current_result
+
+MODIFICATION REQUEST: $feedback"
+                fi
+                continue
+                ;;
+            4)
+                # Start over - re-run the command
+                echo ""
+                echo -e "${BLUE}Starting over...${NC}"
+                echo ""
+                cmd_reply
+                return
+                ;;
+            5|*)
+                echo -e "${GREEN}Done!${NC}"
+                break
+                ;;
+        esac
+    done
+}
+
 # Show help
 show_help() {
     echo -e "${BLUE}Localizer${NC} - Process and chat with files using local LLMs"
@@ -739,6 +976,7 @@ show_help() {
     echo "  chat [path]     Interactively chat and ask questions about file contents"
     echo "  speak [path]    Read file contents aloud using text-to-speech"
     echo "  record          Record audio from microphone (transcribe or save)"
+    echo "  reply           Polish and refine message replies with professional tone"
     echo ""
     echo "Note: If no path is provided, a file picker dialog will open (macOS)."
     echo ""
@@ -752,6 +990,7 @@ show_help() {
     echo "  localizer chat ./document.pdf"
     echo "  localizer speak ./readme.md    # speak file contents"
     echo "  localizer record               # record from microphone"
+    echo "  localizer reply                # write polished professional replies"
     echo ""
     echo "Supported file types:"
     echo "  Text:   .txt, .md, .json, .yaml, .yml, .xml, .csv"
@@ -793,6 +1032,9 @@ main() {
             ;;
         record)
             cmd_record
+            ;;
+        reply)
+            cmd_reply
             ;;
         help|--help|-h)
             show_help
