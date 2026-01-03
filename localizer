@@ -636,7 +636,7 @@ cmd_record() {
     if [[ "$record_choice" == "1" ]] && [[ "$whisper_available" == false ]]; then
         echo ""
         echo -e "${RED}Error: whisper is not installed.${NC}"
-        echo "Please install it: brew install whisper-cpp"
+        echo "Please install it: brew install openai-whisper"
         exit 1
     fi
 
@@ -725,6 +725,254 @@ cmd_record() {
             exit 1
             ;;
     esac
+}
+
+# Check if Homebrew is installed
+has_homebrew() {
+    command -v brew &> /dev/null
+}
+
+# Install a Homebrew package
+brew_install() {
+    local package="$1"
+    local cask="$2"
+
+    if [[ "$cask" == "cask" ]]; then
+        brew install --cask "$package"
+    else
+        brew install "$package"
+    fi
+}
+
+# Setup command: add localizer to PATH via zshrc
+cmd_setup() {
+    local script_path
+    script_path="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
+
+    local zshrc="$HOME/.zshrc"
+    local alias_line="alias localizer='$script_path'"
+    local path_line="export PATH=\"\$PATH:$(dirname "$script_path")\""
+
+    echo -e "${BLUE}=== Localizer Setup ===${NC}"
+    echo ""
+
+    # Step 1: Check and install dependencies
+    echo -e "${BLUE}[1/3] Checking dependencies...${NC}"
+    echo ""
+
+    if ! has_homebrew; then
+        echo -e "${RED}Homebrew is not installed.${NC}"
+        echo "Please install it from https://brew.sh"
+        echo ""
+        read -p "Continue without installing dependencies? (y/n) [n]: " continue_choice
+        if [[ "$continue_choice" != "y" && "$continue_choice" != "Y" ]]; then
+            exit 1
+        fi
+    else
+        # Define dependencies: name|check_command|brew_package|required|description
+        local deps=(
+            "Ollama|ollama|ollama|yes|Required for LLM processing"
+            "sox|rec|sox|no|For voice recording"
+            "Whisper|whisper|openai-whisper|no|For audio transcription"
+            "pdftotext|pdftotext|poppler|no|For PDF support"
+            "Tesseract|tesseract|tesseract|no|For image OCR"
+        )
+
+        local missing_required=()
+        local missing_optional=()
+
+        for dep in "${deps[@]}"; do
+            IFS='|' read -r name cmd package required desc <<< "$dep"
+            if ! command -v "$cmd" &> /dev/null; then
+                if [[ "$required" == "yes" ]]; then
+                    missing_required+=("$name|$package|$desc")
+                else
+                    missing_optional+=("$name|$package|$desc")
+                fi
+            else
+                echo -e "  ${GREEN}✓${NC} $name"
+            fi
+        done
+
+        # Install required dependencies
+        if [[ ${#missing_required[@]} -gt 0 ]]; then
+            echo ""
+            echo -e "${YELLOW}Missing required dependencies:${NC}"
+            for dep in "${missing_required[@]}"; do
+                IFS='|' read -r name package desc <<< "$dep"
+                echo -e "  ${RED}✗${NC} $name - $desc"
+            done
+            echo ""
+            read -p "Install required dependencies? (y/n) [y]: " install_choice
+            install_choice="${install_choice:-y}"
+
+            if [[ "$install_choice" == "y" || "$install_choice" == "Y" ]]; then
+                for dep in "${missing_required[@]}"; do
+                    IFS='|' read -r name package desc <<< "$dep"
+                    echo -e "${BLUE}Installing $name...${NC}"
+                    if [[ "$package" == "ollama" ]]; then
+                        brew_install "$package" "cask"
+                    else
+                        brew_install "$package"
+                    fi
+                done
+            fi
+        fi
+
+        # Offer to install optional dependencies
+        if [[ ${#missing_optional[@]} -gt 0 ]]; then
+            echo ""
+            echo -e "${YELLOW}Missing optional dependencies:${NC}"
+            local i=1
+            for dep in "${missing_optional[@]}"; do
+                IFS='|' read -r name package desc <<< "$dep"
+                echo -e "  $i) ${YELLOW}○${NC} $name - $desc"
+                ((i++))
+            done
+            echo ""
+            echo "Enter numbers to install (comma-separated), 'all', or 'skip':"
+            read -p "Choice [skip]: " optional_choice
+            optional_choice="${optional_choice:-skip}"
+
+            if [[ "$optional_choice" == "all" ]]; then
+                for dep in "${missing_optional[@]}"; do
+                    IFS='|' read -r name package desc <<< "$dep"
+                    echo -e "${BLUE}Installing $name...${NC}"
+                    brew_install "$package"
+                done
+            elif [[ "$optional_choice" != "skip" ]]; then
+                IFS=',' read -ra selections <<< "$optional_choice"
+                for sel in "${selections[@]}"; do
+                    sel=$(echo "$sel" | tr -d ' ')
+                    if [[ "$sel" =~ ^[0-9]+$ ]] && [[ "$sel" -ge 1 ]] && [[ "$sel" -le ${#missing_optional[@]} ]]; then
+                        local dep="${missing_optional[$((sel-1))]}"
+                        IFS='|' read -r name package desc <<< "$dep"
+                        echo -e "${BLUE}Installing $name...${NC}"
+                        brew_install "$package"
+                    fi
+                done
+            fi
+        fi
+    fi
+
+    echo ""
+
+    # Step 2: Check for Ollama models
+    echo -e "${BLUE}[2/3] Checking Ollama models...${NC}"
+    echo ""
+
+    if command -v ollama &> /dev/null; then
+        local models
+        models=$(ollama list 2>/dev/null | tail -n +2 | awk '{print $1}' | grep -v "^$")
+
+        if [[ -z "$models" ]]; then
+            echo -e "${YELLOW}No Ollama models found.${NC}"
+            echo ""
+            echo "Recommended models:"
+            echo "  1) llama3.2 - Good general purpose model (2GB)"
+            echo "  2) llama3.2:1b - Smaller/faster variant (1.3GB)"
+            echo "  3) mistral - Great for coding tasks (4GB)"
+            echo "  4) llava - Vision model for images (4.7GB)"
+            echo ""
+            echo "Enter numbers to pull (comma-separated), or 'skip':"
+            read -p "Choice [1]: " model_choice
+            model_choice="${model_choice:-1}"
+
+            if [[ "$model_choice" != "skip" ]]; then
+                local model_map=("llama3.2" "llama3.2:1b" "mistral" "llava")
+                IFS=',' read -ra selections <<< "$model_choice"
+                for sel in "${selections[@]}"; do
+                    sel=$(echo "$sel" | tr -d ' ')
+                    if [[ "$sel" =~ ^[0-9]+$ ]] && [[ "$sel" -ge 1 ]] && [[ "$sel" -le 4 ]]; then
+                        local model="${model_map[$((sel-1))]}"
+                        echo -e "${BLUE}Pulling $model...${NC}"
+                        ollama pull "$model"
+                    fi
+                done
+            fi
+        else
+            echo -e "${GREEN}Found installed models:${NC}"
+            echo "$models" | while read -r model; do
+                echo -e "  ${GREEN}✓${NC} $model"
+            done
+
+            # Check if a vision model is available
+            if ! echo "$models" | grep -qE "^(llava|bakllava|moondream|llama3.2-vision|minicpm-v|cogvlm|yi-vl)"; then
+                echo ""
+                echo -e "${YELLOW}No vision model found. Want to pull llava for image support?${NC}"
+                read -p "(y/n) [n]: " pull_vision
+                if [[ "$pull_vision" == "y" || "$pull_vision" == "Y" ]]; then
+                    echo -e "${BLUE}Pulling llava...${NC}"
+                    ollama pull llava
+                fi
+            fi
+        fi
+    else
+        echo -e "${YELLOW}Ollama not installed. Skipping model check.${NC}"
+    fi
+
+    echo ""
+
+    # Step 3: Add to shell
+    echo -e "${BLUE}[3/3] Configuring shell...${NC}"
+    echo ""
+
+    echo -e "${YELLOW}How would you like to add localizer to your shell?${NC}"
+    echo "  1) Add to PATH (recommended)"
+    echo "  2) Create alias"
+    echo "  3) Skip (already configured or manual setup)"
+    echo ""
+    read -p "Choice (1-3) [1]: " setup_choice
+    setup_choice="${setup_choice:-1}"
+
+    if [[ "$setup_choice" == "3" ]]; then
+        echo -e "${GREEN}Setup complete!${NC}"
+        return
+    fi
+
+    local line_to_add
+    local method_name
+
+    case "$setup_choice" in
+        2)
+            line_to_add="$alias_line"
+            method_name="alias"
+            ;;
+        *)
+            line_to_add="$path_line"
+            method_name="PATH"
+            ;;
+    esac
+
+    # Check if already configured
+    if grep -qF "$(dirname "$script_path")" "$zshrc" 2>/dev/null || grep -qF "$alias_line" "$zshrc" 2>/dev/null; then
+        echo -e "${YELLOW}Localizer appears to already be configured in $zshrc${NC}"
+        read -p "Add anyway? (y/n) [n]: " confirm
+        if [[ "$confirm" != "y" && "$confirm" != "Y" ]]; then
+            echo -e "${GREEN}Setup complete!${NC}"
+            return
+        fi
+    fi
+
+    # Backup zshrc
+    if [[ -f "$zshrc" ]]; then
+        cp "$zshrc" "$zshrc.backup.$(date +%Y%m%d%H%M%S)"
+        echo -e "${GREEN}Backed up existing .zshrc${NC}"
+    fi
+
+    # Add the line
+    echo "" >> "$zshrc"
+    echo "# Localizer - local LLM file processor" >> "$zshrc"
+    echo "$line_to_add" >> "$zshrc"
+
+    echo ""
+    echo -e "${GREEN}Setup complete!${NC}"
+    echo ""
+    echo -e "${YELLOW}To use immediately, run:${NC}"
+    echo "  source ~/.zshrc"
+    echo ""
+    echo -e "${YELLOW}Then try:${NC}"
+    echo "  localizer help"
 }
 
 # Reply command: polish messages/replies with professional tone
@@ -977,6 +1225,7 @@ show_help() {
     echo "  speak [path]    Read file contents aloud using text-to-speech"
     echo "  record          Record audio from microphone (transcribe or save)"
     echo "  reply           Polish and refine message replies with professional tone"
+    echo "  setup           Add localizer to your PATH (configure shell)"
     echo ""
     echo "Note: If no path is provided, a file picker dialog will open (macOS)."
     echo ""
@@ -991,6 +1240,7 @@ show_help() {
     echo "  localizer speak ./readme.md    # speak file contents"
     echo "  localizer record               # record from microphone"
     echo "  localizer reply                # write polished professional replies"
+    echo "  localizer setup                # add localizer to your shell"
     echo ""
     echo "Supported file types:"
     echo "  Text:   .txt, .md, .json, .yaml, .yml, .xml, .csv"
@@ -1012,7 +1262,7 @@ show_help() {
     echo "  - tesseract: For image OCR (brew install tesseract)"
     echo "  - Vision model: For native image understanding (ollama pull llava)"
     echo "  - sox: For microphone recording (brew install sox)"
-    echo "  - whisper: For audio transcription (brew install whisper-cpp)"
+    echo "  - whisper: For audio transcription (brew install openai-whisper)"
 }
 
 # Main entry point
@@ -1035,6 +1285,9 @@ main() {
             ;;
         reply)
             cmd_reply
+            ;;
+        setup)
+            cmd_setup
             ;;
         help|--help|-h)
             show_help

@@ -8,6 +8,7 @@ A command-line tool for processing and chatting with files using local LLMs via 
 - **Chat with files** - Interactive Q&A about file contents
 - **Text-to-speech** - Read files aloud using macOS voices
 - **Voice recording** - Record from microphone, transcribe with Whisper or save audio
+- **Reply assistant** - Polish and refine professional message replies
 
 ## Requirements
 
@@ -21,21 +22,34 @@ A command-line tool for processing and chatting with files using local LLMs via 
    ```bash
    chmod +x localizer
    ```
-3. Install Ollama and pull a model:
+3. Run the setup wizard:
    ```bash
-   brew install ollama
-   ollama pull llama3.2
+   ./localizer setup
    ```
 
-### Optional Dependencies
+The setup wizard will:
+- Check and install required dependencies (Ollama) via Homebrew
+- Offer to install optional dependencies (sox, whisper, tesseract, poppler)
+- Pull Ollama models if none are installed
+- Add localizer to your PATH or create a shell alias
+
+### Manual Installation
+
+If you prefer manual setup, install dependencies yourself:
 
 | Feature | Dependency | Install |
 |---------|------------|---------|
+| **LLM processing** | Ollama (required) | `brew install --cask ollama` |
 | PDF support | pdftotext | `brew install poppler` |
 | Image OCR | tesseract | `brew install tesseract` |
 | Native image understanding | Vision model | `ollama pull llava` |
 | Voice recording | sox | `brew install sox` |
 | Audio transcription | whisper | `brew install openai-whisper` |
+
+Then pull at least one model:
+```bash
+ollama pull llama3.2
+```
 
 ## Usage
 
@@ -88,6 +102,32 @@ Options:
 
 Press `Ctrl+C` to stop recording.
 
+#### `reply`
+Polish and refine professional message replies using local LLMs.
+
+```bash
+./localizer reply
+```
+
+Features:
+- Paste the original message context
+- Enter your draft reply or key points
+- Choose from multiple tones (Professional, Friendly, Formal, Direct, Diplomatic)
+- Copy polished result to clipboard
+- Iterate with feedback until satisfied
+
+#### `setup`
+One-time setup wizard that configures everything needed to run localizer.
+
+```bash
+./localizer setup
+```
+
+The wizard walks you through 3 steps:
+1. **Dependencies** - Checks for and installs required/optional tools via Homebrew
+2. **Ollama Models** - Pulls recommended LLM models if none are installed
+3. **Shell Config** - Adds localizer to your PATH or creates an alias
+
 ## Supported File Types
 
 | Category | Extensions |
@@ -121,6 +161,9 @@ Assistant: ...
 
 # Record a voice memo and transcribe it
 ./localizer record
+
+# Write a polished professional reply
+./localizer reply
 ```
 
 ## License
