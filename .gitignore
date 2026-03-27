@@ -1,0 +1,5 @@
+node_modules/
+dist/
+web/server/uploads/
+output.txt
+.DS_Store

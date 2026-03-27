@@ -1,6 +1,6 @@
 # Localizer
 
-A command-line tool for processing and chatting with files using local LLMs via Ollama. Supports text, code, PDFs, and images.
+A tool for processing and chatting with files using local LLMs via Ollama. Available as both a CLI and a web interface. Supports text, code, PDFs, and images.
 
 ## Features
 
@@ -9,16 +9,18 @@ A command-line tool for processing and chatting with files using local LLMs via 
 - **Text-to-speech** - Read files aloud using macOS voices
 - **Voice recording** - Record from microphone, transcribe with Whisper or save audio
 - **Reply assistant** - Polish and refine professional message replies
+- **Web interface** - Browser-based UI with streaming responses, drag-and-drop uploads, and microphone selector
 
 ## Requirements
 
 - macOS (uses native file pickers and `say` command)
 - [Ollama](https://ollama.ai) with at least one model installed
+- Node.js 18+ (for the web interface)
 
 ## Installation
 
 1. Clone or download this repository
-2. Make the script executable:
+2. Make the CLI script executable:
    ```bash
    chmod +x localizer
    ```
@@ -43,15 +45,46 @@ If you prefer manual setup, install dependencies yourself:
 | PDF support | pdftotext | `brew install poppler` |
 | Image OCR | tesseract | `brew install tesseract` |
 | Native image understanding | Vision model | `ollama pull llava` |
-| Voice recording | sox | `brew install sox` |
 | Audio transcription | whisper | `brew install openai-whisper` |
+| Audio conversion | ffmpeg | `brew install ffmpeg` |
 
 Then pull at least one model:
 ```bash
 ollama pull llama3.2
 ```
 
-## Usage
+## Web Interface
+
+A browser-based UI that exposes all localizer features with a modern dark-themed design, real-time streaming, and drag-and-drop file uploads.
+
+### Quick Start
+
+```bash
+cd web
+npm run install:all
+npm run dev
+```
+
+This starts both the Express backend (port 3001) and the Vite frontend (port 5173). Open **http://localhost:5173** in your browser.
+
+### Web Features
+
+- **Process** - Upload files, pick a model, enter instructions, view streaming output
+- **Chat** - Upload context files, multi-turn conversation with streaming responses
+- **Reply** - Paste a message, write a draft, choose a tone, get a polished reply
+- **Speak** - Paste text or upload a file, select voice and speed, trigger TTS
+- **Record** - Browser-based recording with microphone selection, transcribe via Whisper
+- **Setup** - View Ollama status, check dependencies, pull new models
+
+### Tech Stack
+
+- **Frontend**: React 18, Vite, Tailwind CSS
+- **Backend**: Node.js, Express
+- **LLM**: Ollama local API (localhost:11434)
+- **Recording**: Browser MediaRecorder API (no sox required)
+- **Transcription**: Whisper via ffmpeg + openai-whisper
+
+## CLI Usage
 
 ```bash
 ./localizer <command> [path]
@@ -164,6 +197,9 @@ Assistant: ...
 
 # Write a polished professional reply
 ./localizer reply
+
+# Start the web interface
+cd web && npm run dev
 ```
 
 ## License

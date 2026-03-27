@@ -1,0 +1,146 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ── Base ──────────────────────────────────────────────── */
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: #2e2e34 transparent;
+}
+
+*::-webkit-scrollbar {
+  width: 6px;
+}
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+*::-webkit-scrollbar-thumb {
+  background: #2e2e34;
+  border-radius: 3px;
+}
+
+::selection {
+  background: rgba(232, 112, 66, 0.3);
+  color: #ede9e3;
+}
+
+body {
+  margin: 0;
+  background: #07070a;
+  color: #ede9e3;
+  font-family: 'Outfit', system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* ── Noise Overlay ────────────────────────────────────── */
+
+#root::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  pointer-events: none;
+  opacity: 0.025;
+  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='1'/%3E%3C/svg%3E");
+  background-repeat: repeat;
+  background-size: 256px 256px;
+}
+
+/* ── Typography ───────────────────────────────────────── */
+
+h1, h2, h3, h4 {
+  font-family: 'Syne', system-ui, sans-serif;
+  letter-spacing: -0.02em;
+}
+
+code, pre, .font-mono {
+  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+}
+
+/* ── Custom Components ────────────────────────────────── */
+
+@layer components {
+  .card {
+    @apply bg-forge-850 border border-forge-600/50 rounded-xl;
+  }
+
+  .card-hover {
+    @apply card transition-all duration-200 hover:border-forge-500 hover:bg-forge-800;
+  }
+
+  .input-field {
+    @apply w-full bg-forge-800 border border-forge-600/60 rounded-lg px-4 py-3
+           text-forge-50 placeholder-forge-400 font-body
+           outline-none transition-all duration-200
+           focus:border-ember/60 focus:ring-1 focus:ring-ember/20;
+  }
+
+  .btn-primary {
+    @apply inline-flex items-center justify-center gap-2 px-5 py-2.5
+           bg-ember text-white font-body font-medium rounded-lg
+           transition-all duration-200
+           hover:bg-ember-light active:scale-[0.97]
+           disabled:opacity-40 disabled:pointer-events-none;
+  }
+
+  .btn-secondary {
+    @apply inline-flex items-center justify-center gap-2 px-5 py-2.5
+           bg-forge-700 text-forge-100 font-body font-medium rounded-lg
+           border border-forge-600/60 transition-all duration-200
+           hover:bg-forge-600 hover:border-forge-500 active:scale-[0.97]
+           disabled:opacity-40 disabled:pointer-events-none;
+  }
+
+  .btn-ghost {
+    @apply inline-flex items-center justify-center gap-2 px-3 py-2
+           text-forge-300 font-body rounded-lg
+           transition-all duration-200
+           hover:text-forge-100 hover:bg-forge-700/50;
+  }
+
+  .label {
+    @apply block text-sm font-medium text-forge-300 mb-1.5 font-body;
+  }
+
+  .view-header {
+    @apply text-2xl font-display font-bold text-forge-50 mb-1;
+  }
+
+  .view-subtitle {
+    @apply text-sm text-forge-400 mb-8;
+  }
+}
+
+/* ── Streaming cursor ─────────────────────────────────── */
+
+.streaming-cursor::after {
+  content: '▊';
+  display: inline;
+  animation: blink 0.8s step-end infinite;
+  color: #e87042;
+  margin-left: 1px;
+}
+
+@keyframes blink {
+  50% { opacity: 0; }
+}
+
+/* ── Subtle gradient borders ──────────────────────────── */
+
+.gradient-border {
+  position: relative;
+}
+
+.gradient-border::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  padding: 1px;
+  border-radius: inherit;
+  background: linear-gradient(135deg, rgba(232, 112, 66, 0.3), rgba(91, 141, 239, 0.15), rgba(46, 46, 52, 0.5));
+  -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+  pointer-events: none;
+}
